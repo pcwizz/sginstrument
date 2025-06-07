@@ -1,0 +1,20 @@
+[package]
+name = "sginstrument"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+license = "Apache-2.0"
+description = "A utility for injecting SGFuzz instrumentation into Rust projects"
+repository = "https://github.com/pcwizz/sginstrument"
+authors = ["Morgan Hill <a@morganrhill.com>"]
+build = "build.rs"
+
+[dependencies]
+syn = { version = "2.0", features = ["full", "extra-traits", "visit-mut"] }
+quote = "1.0"
+proc-macro2 = "1.0"
+walkdir = "2.0"
+
+[[bin]]
+name = "sginstrument"
+path = "src/instrument.rs"
