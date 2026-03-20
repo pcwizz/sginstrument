@@ -274,8 +274,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 mod tests {
     use super::*;
 
+    fn instrument_code(input: &str) -> String {
+        let mut syntax_tree = syn::parse_file(input).unwrap();
+        let mut instrumenter = EnumInstrumenter::new();
+        instrumenter.visit_file_mut(&mut syntax_tree);
+        syntax_tree.to_token_stream().to_string()
+    }
+
+    fn instrument_code_with_stats(input: &str) -> (String, EnumInstrumenter) {
+        let mut syntax_tree = syn::parse_file(input).unwrap();
+        let mut instrumenter = EnumInstrumenter::new();
+        instrumenter.visit_file_mut(&mut syntax_tree);
+        (syntax_tree.to_token_stream().to_string(), instrumenter)
+    }
+
     #[test]
-    fn test_enum_instrumentation() {
+    fn test_let_binding_instrumentation() {
         let input = r#"
 enum Status {
     Active,
@@ -292,14 +306,144 @@ fn main() {
 }
 "#;
 
-        let mut syntax_tree = syn::parse_file(input).unwrap();
-        let mut instrumenter = EnumInstrumenter::new();
-        instrumenter.visit_file_mut(&mut syntax_tree);
+        let output = instrument_code(input);
 
-        let output = syntax_tree.to_token_stream().to_string();
+        assert!(
+            output.contains("sginstrument :: instrument"),
+            "let-binding and assignment sites should be instrumented, got:\n{output}"
+        );
+    }
 
-        // Verify that instrumentation calls were added
-        assert!(output.contains("sginstrument :: instrument (1u32 , 0u32)"));
-        println!("Instrumented code:\n{}", output);
+    #[test]
+    fn test_const_context_skipped() {
+        let input = r#"
+enum Mode {
+    Fast,
+    Slow,
+}
+
+const fn default_mode() -> Mode {
+    Mode::Fast
+}
+
+const DEFAULT: Mode = Mode::Slow;
+"#;
+
+        let output = instrument_code(input);
+
+        assert!(
+            !output.contains("sginstrument :: instrument"),
+            "const contexts should not be instrumented, got:\n{output}"
+        );
+    }
+
+    #[test]
+    fn test_static_context_skipped() {
+        let input = r#"
+enum Level {
+    High,
+    Low,
+}
+
+static LEVEL: Level = Level::High;
+"#;
+
+        let output = instrument_code(input);
+
+        assert!(
+            !output.contains("sginstrument :: instrument"),
+            "static contexts should not be instrumented, got:\n{output}"
+        );
+    }
+
+    #[test]
+    fn test_unknown_enum_not_instrumented() {
+        let input = r#"
+fn main() {
+    let x = Unknown::Variant;
+}
+"#;
+
+        let output = instrument_code(input);
+
+        assert!(
+            !output.contains("sginstrument :: instrument"),
+            "unknown enums should not be instrumented"
+        );
+    }
+
+    #[test]
+    fn test_unique_variant_ids() {
+        let input = r#"
+enum Toggle {
+    On,
+    Off,
+}
+
+fn main() {
+    let a = Toggle::On;
+    let b = Toggle::Off;
+    let c = Toggle::On;
+}
+"#;
+
+        let (_, instrumenter) = instrument_code_with_stats(input);
+
+        assert_eq!(
+            instrumenter.enum_variants.len(),
+            2,
+            "On and Off should have distinct variant IDs"
+        );
+        assert_eq!(
+            instrumenter.location_counter, 4,
+            "3 assignments should produce 3 locations (counter starts at 1)"
+        );
+    }
+
+    #[test]
+    fn test_locations_are_unique() {
+        let input = r#"
+enum Signal {
+    Start,
+    Stop,
+}
+
+fn main() {
+    let a = Signal::Start;
+    let b = Signal::Start;
+}
+"#;
+
+        let (output, instrumenter) = instrument_code_with_stats(input);
+
+        assert!(output.contains("1u32"), "first location should be 1");
+        assert!(output.contains("2u32"), "second location should be 2");
+        assert_eq!(
+            instrumenter.location_counter, 3,
+            "2 instrumentation points, counter should be 3"
+        );
+    }
+
+    #[test]
+    fn test_fn_call_arg_instrumentation() {
+        let input = r#"
+enum Color {
+    Red,
+    Blue,
+}
+
+fn paint(c: Color) {}
+
+fn main() {
+    paint(Color::Red);
+}
+"#;
+
+        let output = instrument_code(input);
+
+        assert!(
+            output.contains("sginstrument :: instrument"),
+            "function call arguments should be instrumented, got:\n{output}"
+        );
     }
 }
